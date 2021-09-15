@@ -2,7 +2,7 @@
 # REPLICATING Ex66btemp ....
 # version 0.1
 
-  rm(list=ls())
+  # rm(list=ls())
 
 # meta vals
   set.seed(1234)
@@ -11,7 +11,7 @@
   oDR = 0.015     # outcome discount rate
   cRatio = 2200   # willingness to pay ?
   INIT_AGE = 60   # age at start
-  SET_MALE = T    # use males = T,  use females = F
+  SET_MALE = F    # use males = T,  use females = F
   
   PSA_IT = 10000  # NUMBER OF PSA ITERATIONS
 
@@ -28,7 +28,7 @@
     mr = mr_f
   }
   
-  index = age - 34
+  index = age - 34 +1
   
   if(index > 60){
    return(mr[length(mr)]) 
@@ -50,15 +50,55 @@
   draw_rrr <- function(n = 1){
     rbeta(n = n, shape1 = 4, shape2 = 	96)
   }
+  
+  # cholesky decomposition
+  choleskyDecomp = function(n){
+    # Survival analysis coefficient
+    coeff <- c(0.37409680, -5.49093500, -0.03670220, 0.76853600, -1.34447400)
+    names(coeff) <- c("lngamma", "cons", "age", "male", "NP1")
+    
+    
+    #Choilesky matrix
+    what <- c(0.0474501,0,0,0,0,-0.119936522789204,0.169806696467586,0,0,0,5.90093593058813E-07,-0.00461070877953144,0.00242857358178443,0,0,0.000107481333021427,-0.0426020246146981,-0.067292831300903,0.0745125704696859,0,0.00545836573579402,7.45400901505983E-05,-0.0455656518412987,-0.0386465373290773,0.377847881235649)
+    
+    mat <- t(matrix(what, ncol = 5))
+    
+    fun <- function(x){
+      rnd <- c(qnorm(runif(n = 1,min = .0000000001,max = .99999999999),0,1),
+               qnorm(runif(n = 1,min = .0000000001,max = .99999999999),0,1),
+               qnorm(runif(n = 1,min = .0000000001,max = .99999999999),0,1),
+               qnorm(runif(n = 1,min = .0000000001,max = .99999999999),0,1),
+               qnorm(runif(n = 1,min = .0000000001,max = .99999999999),0,1))
+      
+      err <- t(mat %*% rnd)
+      return(coeff + err)
+      
+    }
+    
+    # set.seed(070921)
+    prob_coeff <- t(sapply(1:n, fun))
+    colnames(prob_coeff) <- c("lngamma", "cons", "age", "male", "NP1")
+    
+    return(prob_coeff)
+    
+  }
+  
   # Revision risk standard
-  draw_RR_standard <- function(n = NA){
-    return(rep(0.0029,n))
+  draw_RR <- function(n = NA, t_cycle = 1, age = 60, male = 1, cholesky_res){
+    
+    # cholesky_res = choleskyDecomp(n)
+    gammaC = exp(cholesky_res["lngamma"])
+    ageC = cholesky_res["age"]
+    maleC = cholesky_res["male"]
+    cons = cholesky_res["cons"]
+    lambda = exp(cons+ageC*age+maleC*male)
+    np1C = exp(cholesky_res["NP1"])
+    res_standard = 1-exp(lambda*((t_cycle-1)^gammaC-t_cycle^gammaC))
+    res_np1 = 1-exp(lambda*np1C*((t_cycle-1)^gammaC-t_cycle^gammaC))
+    cbind(res_standard, res_np1)
   }
-  draw_RR_NP1 <- function(n = NA){
-    return(rep(0.008,n))
-  }
-
-
+  
+  
 # counting QALYs
   draw_uSuccessP = function(n){
     rbeta(n, shape1 = 119.57, shape2 = 21.10)
@@ -150,13 +190,13 @@
 #    SIMULATION
 # -----------------------------
   
+  start_timer <- Sys.time()
+  
 # draw random params
   omrPTHR = draw_omrPTHR(PSA_IT)
   omrRTHR = draw_omrRTHR(PSA_IT)
   rrr = draw_rrr(PSA_IT)
-  RR_standard = draw_RR_standard(PSA_IT)
-  RR_np1 = draw_RR_NP1(PSA_IT)
-
+  cholesky_res = choleskyDecomp(PSA_IT)
   
   res_mat = matrix(
     data = NA,
@@ -171,13 +211,12 @@
     )
   
   
-  
-  start_timer <- Sys.time()
-  
 for(j in 1:PSA_IT){
 
   age = INIT_AGE        # average patient age
   male = SET_MALE        # sex indicator
+  
+  RR_j = draw_RR(n = 1,age = INIT_AGE, male = SET_MALE, t_cycle = 1:(CYCLES+1),cholesky_res = cholesky_res[j,])
   
   # INIT MARKOV TRACE STANDARD
   mat_standard = matrix(data = NA, nrow = CYCLES+1, ncol = 5)
@@ -189,7 +228,7 @@ for(j in 1:PSA_IT){
       omrPTHR = omrPTHR[j],
       omrRTHR = omrRTHR[j],
       rrr = rrr[j],
-      RR = RR_standard[j],
+      RR = RR_j[x-age+1,1],
       mr = getMR(
         age = x, 
         male = male, 
@@ -209,7 +248,7 @@ for(j in 1:PSA_IT){
       omrPTHR = omrPTHR[j],
       omrRTHR = omrRTHR[j],
       rrr = rrr[j],
-      RR = RR_np1[j],
+      RR = RR_j[x-age+1,2],
       mr = getMR(
         age = x, 
         male = male, 
@@ -218,8 +257,8 @@ for(j in 1:PSA_IT){
       )
     )
   })
-
-
+  
+  
   # INNER LOOP
   for(i in 1:CYCLES){
     
@@ -284,15 +323,16 @@ for(j in 1:PSA_IT){
   elapsed_time = end_timer - start_timer
   elapsed_time
   
-  # approx 800 it per second, constant between 10k-40k
-  # ==> 1 million iterations in 21 mins ?!
-  
   # mean INB
   mean(res_mat[,6] - res_mat[,3])
 
+  apply(res_mat, 2, mean)
+
+  
+  write.csv(res_mat, "res_mat.csv", row.names = F)
 
 
-
-
-
+# run 1: 10,000 iterations in 35.8860
+# run 2: 10,000 iterations in 18.09653 
+# run 3: 100,000 iterations in 
 
